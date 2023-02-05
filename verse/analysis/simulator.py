@@ -9,15 +9,19 @@ from verse.agents.base_agent import BaseAgent
 from verse.analysis.incremental import SimTraceCache, convert_sim_trans, to_simulate
 from verse.analysis.utils import dedup
 from verse.parser.parser import ModePath, find
+
 pp = functools.partial(pprint.pprint, compact=True, width=130)
 
 # from verse.agents.base_agent import BaseAgent
 from verse.analysis.analysis_tree import AnalysisTreeNode, AnalysisTree
 
 PathDiffs = List[Tuple[BaseAgent, ModePath]]
+# store in different file???
+MAX_DEPTH = 3
+
 
 def red(s):
-    return "\x1b[31m" + s + "\x1b[0m" #]]
+    return "\x1b[31m" + s + "\x1b[0m"  # ]]
 
 
 class Simulator:
@@ -36,6 +40,7 @@ class Simulator:
             mode={},
             static={},
             uncertain_param={},
+            height=0,
             agent={},
             child=[],
             start_time=0,
@@ -55,6 +60,8 @@ class Simulator:
         # Perform BFS through the simulation tree to loop through all possible transitions
         while simulation_queue != []:
             node: AnalysisTreeNode = simulation_queue.pop(0)
+            # Setup the root of the simulation tree
+
             # pp(("start sim", node.start_time, {a: (*node.mode[a], *node.init[a]) for a in node.mode}))
             remain_time = round(time_horizon - node.start_time, 10)
             if remain_time <= 0:
@@ -81,7 +88,9 @@ class Simulator:
                     if cached != None:
                         node.trace[agent_id] = cached.trace
                         if len(cached.trace) < remain_time / time_step:
-                            node.trace[agent_id] += node.agent[agent_id].TC_simulate(mode, cached.trace[-1], remain_time - time_step * len(cached.trace), lane_map)
+                            node.trace[agent_id] += node.agent[agent_id].TC_simulate(mode, cached.trace[-1],
+                                                                                     remain_time - time_step * len(
+                                                                                         cached.trace), lane_map)
                         cached_segments[agent_id] = cached
                     else:
                         # pp(("sim", agent_id, *mode, *init))
@@ -107,7 +116,8 @@ class Simulator:
                 # else:
                 #     print("!!!")
 
-            asserts, transitions, transition_idx = transition_graph.get_transition_simulate(new_cache, paths_to_sim, node)
+            asserts, transitions, transition_idx = transition_graph.get_transition_simulate(new_cache, paths_to_sim,
+                                                                                            node)
             # pp(("transitions:", transition_idx, transitions))
 
             node.assert_hits = asserts
@@ -119,7 +129,7 @@ class Simulator:
                 full_traces[agent_idx] = node.trace[agent_idx]
                 if transitions:
                     truncated_trace[agent_idx] = node.trace[agent_idx][transition_idx:]
-                    node.trace[agent_idx] = node.trace[agent_idx][:transition_idx+1]
+                    node.trace[agent_idx] = node.trace[agent_idx][:transition_idx + 1]
 
             if asserts != None:
                 pass
@@ -131,8 +141,12 @@ class Simulator:
                     if self.config.incremental:
                         for agent_id in node.agent:
                             if agent_id not in cached_segments:
-                                self.cache.add_segment(agent_id, node, [], full_traces[agent_id], [], transition_idx, run_num)
+                                self.cache.add_segment(agent_id, node, [], full_traces[agent_id], [], transition_idx,
+                                                       run_num)
                     # print(red("no trans"))
+                    continue
+                if (node.height >= MAX_DEPTH):
+                    print("max depth reached")
                     continue
 
                 transit_agents = transitions.keys()
@@ -141,12 +155,15 @@ class Simulator:
                     for agent_id in node.agent:
                         transition = transitions[agent_id] if agent_id in transit_agents else []
                         if agent_id in cached_segments:
-                            cached_segments[agent_id].transitions.extend(convert_sim_trans(agent_id, transit_agents, node.init, transition, transition_idx))
+                            cached_segments[agent_id].transitions.extend(
+                                convert_sim_trans(agent_id, transit_agents, node.init, transition, transition_idx))
                             pre_len = len(cached_segments[agent_id].transitions)
-                            cached_segments[agent_id].transitions = dedup(cached_segments[agent_id].transitions, lambda i: (i.disc, i.cont, i.inits))
+                            cached_segments[agent_id].transitions = dedup(cached_segments[agent_id].transitions,
+                                                                          lambda i: (i.disc, i.cont, i.inits))
                             # pp(("dedup!", pre_len, len(cached_segments[agent_id].transitions)))
                         else:
-                            self.cache.add_segment(agent_id, node, transit_agents, full_traces[agent_id], transition, transition_idx, run_num)
+                            self.cache.add_segment(agent_id, node, transit_agents, full_traces[agent_id], transition,
+                                                   transition_idx, run_num)
                 # pp(("cached inits", self.cache.get_cached_inits(3)))
                 # Generate the transition combinations if multiple agents can transit at the same time step
                 transition_list = list(transitions.values())
@@ -181,6 +198,7 @@ class Simulator:
                             next_node_init[agent_idx] = truncated_trace[agent_idx][0][1:]
 
                     all_transition_paths.append(transition_paths)
+
                     tmp = AnalysisTreeNode(
                         trace=next_node_trace,
                         init=next_node_init,
@@ -188,6 +206,7 @@ class Simulator:
                         static=next_node_static,
                         uncertain_param=next_node_uncertain_param,
                         agent=next_node_agent,
+                        height=node.height + 1,
                         child=[],
                         start_time=next_node_start_time,
                         type='simtrace'
@@ -205,12 +224,12 @@ class Simulator:
             #         start_time = next_node_start_time
             #     ))
             # simulation_queue += node.child
-        
+
         self.simulation_tree = AnalysisTree(root)
         return self.simulation_tree
 
     def simulate_simple(self, init_list, init_mode_list, static_list, uncertain_param_list, agent_list,
-                 transition_graph, time_horizon, time_step, lane_map, run_num, past_runs):
+                        transition_graph, time_horizon, time_step, lane_map, run_num, past_runs):
         # Setup the root of the simulation tree
         root = AnalysisTreeNode(
             trace={},
@@ -219,6 +238,7 @@ class Simulator:
             static={},
             uncertain_param={},
             agent={},
+            height=0,
             child=[],
             start_time=0,
         )
@@ -237,6 +257,8 @@ class Simulator:
         # Perform BFS through the simulation tree to loop through all possible transitions
         while simulation_queue != []:
             node: AnalysisTreeNode = simulation_queue.pop(0)
+            # continue if we are at the depth limit
+
             pp(("start sim", node.start_time, {a: (*node.mode[a], *node.init[a]) for a in node.mode}))
             remain_time = round(time_horizon - node.start_time, 10)
             if remain_time <= 0:
@@ -255,7 +277,7 @@ class Simulator:
             # pp(("cached_segments", cached_segments.keys()))
             # TODO: for now, make sure all the segments comes from the same node; maybe we can do
             # something to combine results from different nodes in the future
-            
+
             asserts, transitions, transition_idx = transition_graph.get_transition_simulate_simple(node)
             # pp(("transitions:", transition_idx, transitions))
 
@@ -268,7 +290,7 @@ class Simulator:
                 full_traces[agent_idx] = node.trace[agent_idx]
                 if transitions or asserts:
                     truncated_trace[agent_idx] = node.trace[agent_idx][transition_idx:]
-                    node.trace[agent_idx] = node.trace[agent_idx][:transition_idx+1]
+                    node.trace[agent_idx] = node.trace[agent_idx][:transition_idx + 1]
 
             if asserts != None:
                 pass
@@ -278,9 +300,12 @@ class Simulator:
                 # If there's no transitions (returned transitions is empty), continue
                 if not transitions:
                     continue
+                if (node.height >= MAX_DEPTH):
+                    print("max depth reached")
+                    continue
 
                 # pp(("transit agents", transit_agents))
-                
+
                 transition_list = list(transitions.values())
                 all_transition_combinations = itertools.product(
                     *transition_list)
@@ -313,6 +338,7 @@ class Simulator:
                             next_node_init[agent_idx] = truncated_trace[agent_idx][0][1:]
 
                     all_transition_paths.append(transition_paths)
+
                     tmp = AnalysisTreeNode(
                         trace=next_node_trace,
                         init=next_node_init,
@@ -320,6 +346,7 @@ class Simulator:
                         static=next_node_static,
                         uncertain_param=next_node_uncertain_param,
                         agent=next_node_agent,
+                        height=node.height + 1,
                         child=[],
                         start_time=next_node_start_time,
                         type='simtrace'
@@ -337,7 +364,7 @@ class Simulator:
             #         start_time = next_node_start_time
             #     ))
             # simulation_queue += node.child
-        
+
         self.simulation_tree = AnalysisTree(root)
         return self.simulation_tree
 
